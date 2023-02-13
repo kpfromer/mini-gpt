@@ -98,6 +98,20 @@ class MultiHeadAttention(nn.Module):
         return torch.cat([h(x) for h in self.heads], dim=-1)
 
 
+class FeedForward(nn.Module):
+    """ a simple linear layer followed by a non-linearity """
+
+    def __init__(self, n_embedding):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(n_embedding, n_embedding),
+            nn.ReLU(),
+        )
+
+    def forward(self, x):
+        return self.net(x)
+
+
 class BigramLanguageModel(nn.Module):
     """
     Notes:
@@ -115,6 +129,7 @@ class BigramLanguageModel(nn.Module):
         # self.sa_head = Head(n_embedding)
         self.sa_heads = MultiHeadAttention(
             4, n_embedding // 4)  # 4 heads of 8-dimensional self-attention
+        self.ffwd = FeedForward(n_embedding)
         # language modeling head
         self.lm_head = nn.Linear(n_embedding, vocab_size)
 
@@ -126,7 +141,8 @@ class BigramLanguageModel(nn.Module):
         position_embeddings = self.position_embedding_table(
             torch.arange(T, device=device))  # (T,C)
         x = token_embeddings + position_embeddings  # (B,T,C)
-        x = self.sa_heads(x)  # apply one head of self-attenion (B,T,C)
+        x = self.sa_heads(x)  # apply multi head of self-attenion (B,T,C)
+        x = self.ffwd(x)  # (B,T,C)
         logits = self.lm_head(x)  # (B,T,vocab_size)
 
         if targets is None:
