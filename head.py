@@ -125,11 +125,13 @@ class Block(nn.Module):
         head_size = n_embedding // n_head
         self.sa = MultiHeadAttention(n_head, head_size)
         self.ffwd = FeedForward(n_embedding)
+        self.linear_norm_1 = nn.LayerNorm(n_embedding)
+        self.linear_norm_2 = nn.LayerNorm(n_embedding)
 
     def forward(self, x):
         # the x + is the residual connection
-        x = x + self.sa(x)
-        x = x + self.ffwd(x)
+        x = x + self.sa(self.linear_norm_1(x))
+        x = x + self.ffwd(self.linear_norm_2(x))
         return x
 
 
@@ -151,6 +153,7 @@ class BigramLanguageModel(nn.Module):
             Block(n_embedding, n_head=4),
             Block(n_embedding, n_head=4),
             Block(n_embedding, n_head=4),
+            nn.LayerNorm(n_embedding),
         )
         # language modeling head
         self.lm_head = nn.Linear(n_embedding, vocab_size)
