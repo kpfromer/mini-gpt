@@ -1,31 +1,22 @@
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
-# from dataclasses import dataclass
-from hyperparameters import *
-
-# @dataclass
-# class GPTConfig:
-#     block_size: int = 64
-#     vocab_size: int = 256
-#     number_layers: int = 6
-#     number_heads: int = 6
-#     number_embeddings: int = 384
-#     dropout: float = 0.2
+from config import GPTConfig
 
 
 class Head(nn.Module):
     """ one head of self-attenion """
 
-    def __init__(self, head_size):
+    def __init__(self, config: GPTConfig):
         super().__init__()
-        self.head_size = head_size
-        self.key = nn.Linear(n_embedding, head_size, bias=False)
-        self.query = nn.Linear(n_embedding, head_size, bias=False)
-        self.value = nn.Linear(n_embedding, head_size, bias=False)
-        self.register_buffer('tril',
-                             torch.tril(torch.ones(block_size, block_size)))
-        self.dropout = nn.Dropout(dropout)
+        self.head_size = config.head_size
+        self.key = nn.Linear(config.n_embedding, self.head_size, bias=False)
+        self.query = nn.Linear(config.n_embedding, self.head_size, bias=False)
+        self.value = nn.Linear(config.n_embedding, self.head_size, bias=False)
+        self.register_buffer(
+            'tril', torch.tril(torch.ones(config.block_size,
+                                          config.block_size)))
+        self.dropout = nn.Dropout(config.dropout)
 
     def forward(self, x):
         B, T, C = x.shape
@@ -47,11 +38,12 @@ class Head(nn.Module):
 class MultiHeadAttention(nn.Module):
     """ multiple heads of self-attention in parallel """
 
-    def __init__(self, num_heads, head_size):
+    def __init__(self, config: GPTConfig):
         super().__init__()
-        self.heads = nn.ModuleList([Head(head_size) for _ in range(num_heads)])
-        self.projection = nn.Linear(n_embedding, n_embedding)
-        self.dropout = nn.Dropout(dropout)
+        self.heads = nn.ModuleList(
+            [Head(config) for _ in range(config.n_heads)])
+        self.projection = nn.Linear(config.n_embedding, config.n_embedding)
+        self.dropout = nn.Dropout(config.dropout)
 
     def forward(self, x):
         out = torch.cat([h(x) for h in self.heads], dim=-1)
@@ -63,13 +55,14 @@ class MultiHeadAttention(nn.Module):
 class FeedForward(nn.Module):
     """ a simple linear layer followed by a non-linearity """
 
-    def __init__(self, n_embedding):
+    def __init__(self, config: GPTConfig):
         super().__init__()
         self.net = nn.Sequential(
-            nn.Linear(n_embedding, 4 * n_embedding),
+            nn.Linear(config.n_embedding, 4 * config.n_embedding),
             nn.ReLU(),
-            nn.Linear(4 * n_embedding, n_embedding),  # projection layer
-            nn.Dropout(dropout))
+            nn.Linear(4 * config.n_embedding,
+                      config.n_embedding),  # projection layer
+            nn.Dropout(config.dropout))
 
     def forward(self, x):
         return self.net(x)
@@ -78,13 +71,12 @@ class FeedForward(nn.Module):
 class Block(nn.Module):
     """ Transformer block: communication followed by computation """
 
-    def __init__(self, n_embedding, n_head):
+    def __init__(self, config: GPTConfig):
         super().__init__()
-        head_size = n_embedding // n_head
-        self.sa = MultiHeadAttention(n_head, head_size)
-        self.ffwd = FeedForward(n_embedding)
-        self.linear_norm_1 = nn.LayerNorm(n_embedding)
-        self.linear_norm_2 = nn.LayerNorm(n_embedding)
+        self.sa = MultiHeadAttention(config)
+        self.ffwd = FeedForward(config)
+        self.linear_norm_1 = nn.LayerNorm(config.n_embedding)
+        self.linear_norm_2 = nn.LayerNorm(config.n_embedding)
 
     def forward(self, x):
         # the x + is the residual connection
@@ -101,17 +93,22 @@ class BigramLanguageModel(nn.Module):
     C = the number of channels (n_embedding)
     """
 
-    def __init__(self, vocab_size):
+    def __init__(self, config: GPTConfig, device):
         super().__init__()
 
+        self.device = device
+
         # each token directly reads off the logits for the next token from a lookup table
-        self.token_embedding_table = nn.Embedding(vocab_size, n_embedding)
-        self.position_embedding_table = nn.Embedding(block_size, n_embedding)
+        self.block_size = config.block_size
+        self.token_embedding_table = nn.Embedding(config.vocab_size,
+                                                  config.n_embedding)
+        self.position_embedding_table = nn.Embedding(config.block_size,
+                                                     config.n_embedding)
         self.blocks = nn.Sequential(
-            *[Block(n_embedding, n_head=n_head) for _ in range(n_layer)])
-        self.layer_norm = nn.LayerNorm(n_embedding)
+            *[Block(config) for _ in range(config.n_layers)])
+        self.layer_norm = nn.LayerNorm(config.n_embedding)
         # language modeling head
-        self.lm_head = nn.Linear(n_embedding, vocab_size)
+        self.lm_head = nn.Linear(config.n_embedding, config.vocab_size)
 
     def forward(self, idx, targets=None):
         B, T = idx.shape
@@ -119,7 +116,7 @@ class BigramLanguageModel(nn.Module):
         # idx and targets are both (B,T) tensor of integers
         token_embeddings = self.token_embedding_table(idx)  # (B,T,C)
         position_embeddings = self.position_embedding_table(
-            torch.arange(T, device=device))  # (T,C)
+            torch.arange(T, device=self.device))  # (T,C)
         x = token_embeddings + position_embeddings  # (B,T,C)
         x = self.blocks(x)  # (B,T,C)
         x = self.layer_norm(x)  # (B,T,C)
@@ -138,8 +135,8 @@ class BigramLanguageModel(nn.Module):
     def generate(self, idx, max_new_tokens):
         # idx is (B, T) array of indices in the current context
         for _ in range(max_new_tokens):
-            # crop idx to the last block_size, tokens
-            idx_cond = idx[:, -block_size:]
+            # crop idx to the last config.block_size, tokens
+            idx_cond = idx[:, -self.block_size:]
             # get the predictions
             logits, loss = self(idx_cond)
             # focus only on the last time step

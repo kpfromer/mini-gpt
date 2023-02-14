@@ -1,6 +1,7 @@
 import torch
 from hyperparameters import *
 from model import BigramLanguageModel
+from config import GPTConfig
 
 # wget https://raw.githubusercontent.com/karpathy/char-rnn/master/data/tinyshakespeare/input.txt
 with open('input.txt', 'r', encoding='utf-8') as f:
@@ -48,7 +49,15 @@ def estimate_loss(model):
     model.train()
     return out
 
-model = BigramLanguageModel(vocab_size)
+
+config = GPTConfig(block_size=block_size,
+                   vocab_size=vocab_size,
+                   n_layers=n_layer,
+                   n_heads=n_head,
+                   n_embedding=n_embedding,
+                   dropout=dropout)
+
+model = BigramLanguageModel(config, device=device)
 
 print("Training Model")
 m = model.to(device)

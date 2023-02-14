@@ -1,5 +1,6 @@
 import torch
 from model import BigramLanguageModel
+from config import GPTConfig
 from hyperparameters import *
 
 with open('input.txt', 'r', encoding='utf-8') as f:
@@ -13,7 +14,14 @@ itos = {i: ch for i, ch in enumerate(chars)}
 encode = lambda s: [stoi[c] for c in s]
 decode = lambda l: ''.join([itos[i] for i in l])
 
-model = BigramLanguageModel(vocab_size)
+config = GPTConfig(block_size=block_size,
+                   vocab_size=vocab_size,
+                   n_layers=n_layer,
+                   n_heads=n_head,
+                   n_embedding=n_embedding,
+                   dropout=dropout)
+
+model = BigramLanguageModel(config, device=device)
 
 print("Loading Model")
 
