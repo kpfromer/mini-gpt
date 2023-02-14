@@ -52,6 +52,74 @@ class MultiHeadAttention(nn.Module):
         return out
 
 
+"""
+fast with linear = 
+fast but no linear * 3 = 76 seconds
+slow = 135 seconds
+"""
+
+
+class MultiHeadAttentionEfficient(nn.Module):
+    """ multiple heads of self-attention in parallel, but more efficient """
+
+    def __init__(self, config: GPTConfig):
+        super().__init__()
+        assert config.n_embedding % config.n_heads == 0, "n_embedding must be divisible by n_heads"
+
+        self.n_heads = config.n_heads
+
+        self.key = nn.Linear(config.n_embedding,
+                             config.n_embedding,
+                             bias=False)
+        self.query = nn.Linear(config.n_embedding,
+                               config.n_embedding,
+                               bias=False)
+        self.value = nn.Linear(config.n_embedding,
+                               config.n_embedding,
+                               bias=False)
+        self.register_buffer(
+            "tril",
+            torch.tril(torch.ones(config.block_size, config.block_size)).view(
+                1, 1, config.block_size, config.block_size))
+
+        self.projection = nn.Linear(config.n_embedding, config.n_embedding)
+        self.dropout = nn.Dropout(config.dropout)
+
+    def forward(self, x):
+        B, T, C = x.shape  # where C = n_embedding
+
+        # print(f"B={B}, T={T}, C={C}, n_heads={self.n_heads}")
+        # print(f"weight shape: {self.key.weight.shape}")
+        k = self.key(x).view(B, T, self.n_heads, C // self.n_heads).transpose(
+            1, 2
+        )  # (B,T,C) -> (B,n_heads,T,head_size) where head_size = C // n_heads
+        q = self.query(x).view(
+            B, T, self.n_heads, C // self.n_heads
+        ).transpose(
+            1, 2
+        )  # (B,T,C) -> (B,n_heads,T,head_size) where head_size = C // n_heads
+        v = self.value(x).view(
+            B, T, self.n_heads, C // self.n_heads
+        ).transpose(
+            1, 2
+        )  # (B,T,C) -> (B,n_heads,T,head_size) where head_size = C // n_heads
+
+        # compute attention scores ("affinities")
+        attention = q @ k.transpose(-2, -1) * (
+            C // self.n_heads
+        )**-0.5  # (B,n_heads,T,head_size) @ (B,n_heads,head_size,T) -> (B,n_heads,T,T)
+        attention = attention.masked_fill(self.tril[:, :, :T, :T] == 0,
+                                          float('-inf'))
+        attention = F.softmax(attention, dim=-1)
+        attention = self.dropout(attention)
+        # perform the weighted aggreation of the values
+        attention = attention @ v  # (B,n_heads,T,T) @ (B,n_heads,T,head_size) -> (B,n_heads,T,head_size)
+        out = attention.transpose(1, 2).contiguous().view(
+            B, T, C)  # (B,n_heads,T,head_size) -> (B,T,C)
+
+        return self.dropout(self.projection(out))
+
+
 class FeedForward(nn.Module):
     """ a simple linear layer followed by a non-linearity """
 
@@ -74,6 +142,7 @@ class Block(nn.Module):
     def __init__(self, config: GPTConfig):
         super().__init__()
         self.sa = MultiHeadAttention(config)
+        # self.sa = MultiHeadAttentionEfficient(config)
         self.ffwd = FeedForward(config)
         self.linear_norm_1 = nn.LayerNorm(config.n_embedding)
         self.linear_norm_2 = nn.LayerNorm(config.n_embedding)
@@ -132,6 +201,7 @@ class BigramLanguageModel(nn.Module):
 
         return logits, loss
 
+    @torch.no_grad()
     def generate(self, idx, max_new_tokens):
         # idx is (B, T) array of indices in the current context
         for _ in range(max_new_tokens):
