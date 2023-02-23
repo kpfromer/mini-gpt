@@ -53,9 +53,9 @@ class MultiHeadAttention(nn.Module):
 
 
 """
-fast with linear = 
+fast with linear (MultiHeadAttentionEfficient) = 135?? 
 fast but no linear * 3 = 76 seconds
-slow = 135 seconds
+slow sequential on heads (MultiHeadAttention) = 135 seconds
 """
 
 
@@ -65,18 +65,13 @@ class MultiHeadAttentionEfficient(nn.Module):
     def __init__(self, config: GPTConfig):
         super().__init__()
         assert config.n_embedding % config.n_heads == 0, "n_embedding must be divisible by n_heads"
-
         self.n_heads = config.n_heads
 
-        self.key = nn.Linear(config.n_embedding,
-                             config.n_embedding,
-                             bias=False)
-        self.query = nn.Linear(config.n_embedding,
-                               config.n_embedding,
-                               bias=False)
-        self.value = nn.Linear(config.n_embedding,
-                               config.n_embedding,
-                               bias=False)
+        # * 3 because we have 3 linear parts (key, query, value)
+        self.attention_linear = nn.Linear(config.n_embedding,
+                                          3 * config.n_embedding,
+                                          bias=False)
+
         self.register_buffer(
             "tril",
             torch.tril(torch.ones(config.block_size, config.block_size)).view(
@@ -88,19 +83,15 @@ class MultiHeadAttentionEfficient(nn.Module):
     def forward(self, x):
         B, T, C = x.shape  # where C = n_embedding
 
-        # print(f"B={B}, T={T}, C={C}, n_heads={self.n_heads}")
-        # print(f"weight shape: {self.key.weight.shape}")
-        k = self.key(x).view(B, T, self.n_heads, C // self.n_heads).transpose(
+        k, q, v = self.attention_linear(x).split(
+            C)  # split by embedding size to get key, query, value
+        k = k.view(B, T, self.n_heads, C // self.n_heads).transpose(
             1, 2
         )  # (B,T,C) -> (B,n_heads,T,head_size) where head_size = C // n_heads
-        q = self.query(x).view(
-            B, T, self.n_heads, C // self.n_heads
-        ).transpose(
+        q = q.view(B, T, self.n_heads, C // self.n_heads).transpose(
             1, 2
         )  # (B,T,C) -> (B,n_heads,T,head_size) where head_size = C // n_heads
-        v = self.value(x).view(
-            B, T, self.n_heads, C // self.n_heads
-        ).transpose(
+        v = v.view(B, T, self.n_heads, C // self.n_heads).transpose(
             1, 2
         )  # (B,T,C) -> (B,n_heads,T,head_size) where head_size = C // n_heads
 
