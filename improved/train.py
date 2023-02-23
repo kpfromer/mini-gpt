@@ -3,10 +3,13 @@ from hyperparameters import *
 from model import BigramLanguageModel
 from config import GPTConfig
 import datetime
+import os.path
 
 # wget https://raw.githubusercontent.com/karpathy/char-rnn/master/data/tinyshakespeare/input.txt
 with open('input.txt', 'r', encoding='utf-8') as f:
     text = f.read()
+    # for line in f:
+    #     chars.update(line)
 
 # get all unique chars in the text
 chars = sorted(list(set(text)))
@@ -58,22 +61,44 @@ config = GPTConfig(block_size=block_size,
                    n_embedding=n_embedding,
                    dropout=dropout)
 
-model = BigramLanguageModel(config, device=device)
+# Load checkpoint if it exists
+if os.path.isfile('checkpoint.pt'):
+    print("Loading checkpoint")
+    checkpoint = torch.load('checkpoint.pt')
+    config = checkpoint['config']
+    model = BigramLanguageModel(config, device=device)
+    model.load_state_dict(checkpoint['model_state_dict'])
+    optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate)
+    optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+    iter = checkpoint['iter']
+    print(f"Starting from iteration {iter}")
+else:
+    print("Creating new model")
+    model = BigramLanguageModel(config, device=device)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate)
+    iter = 0
+
+m = model.to(device)
+m.train()
 
 print("Training Model")
-m = model.to(device)
-
-optimizer = torch.optim.AdamW(m.parameters(), lr=learning_rate)
 
 print(f"Using device={device}")
 start_time = datetime.datetime.now()
-for iter in range(max_iters):
+while iter < max_iters:
     # every once in a while evalute the loss on the train and validation sets
     if iter % eval_interval == 0:
         losses = estimate_loss(m)
         print(
             f"step {iter}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}"
         )
+        torch.save(
+            {
+                'iter': iter,
+                'model_state_dict': m.state_dict(),
+                'optimizer_state_dict': optimizer.state_dict(),
+                'config': config
+            }, 'checkpoint.pt')
 
     # sample a batch of data
     xb, yb = get_batch('train')
@@ -83,6 +108,7 @@ for iter in range(max_iters):
     optimizer.zero_grad(set_to_none=True)
     loss.backward()
     optimizer.step()
+    iter += 1
 
 end_time = datetime.datetime.now()
 
